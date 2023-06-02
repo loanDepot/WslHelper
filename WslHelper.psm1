@@ -251,15 +251,65 @@ function Set-WslContent {
         [Alias("Content")]
         [string[]]$InputObject
     )
-    $params = @()
-    if ($Sudo) {
-        $params += "-u", "root"
+    begin {
+        $Content = @()
     }
-    if ($Distribution) {
-        $params += "-d", $Distribution
+    process {
+        $Content += $InputObject
     }
-    Write-Information "@`"`n$($InputObject -join "`n")`n`"@ | wsl $($params -join ' ') sh -c `"cat - > '$Path'`""
-    $InputObject -join "`n" | wsl @params sh -c "cat - > '$Path'"
+    end {
+        $params = @()
+        if ($Sudo) {
+            $params += "-u", "root"
+        }
+        if ($Distribution) {
+            $params += "-d", $Distribution
+        }
+        Write-Information "@`"`n$($InputObject -join "`n")`n`"@ | wsl $($params -join ' ') sh -c `"cat - > '$Path'`""
+        $InputObject -join "`n" | wsl @params sh -c "cat - > '$Path'"
+    }
+}
+
+function Add-WslContent {
+    # .SYNOPSIS
+    #    A wrapper for piping content into WSL files, even if they aren't writeable as the default user.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
+    [CmdletBinding()]
+    param(
+        # The name of the linux distro
+        [Parameter()]
+        [string]$Distribution,
+
+        # The linux file path (should be an absolute path)
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        # If set, run as root to write to protected paths.
+        # Remember: This means the owner will be root!
+        [switch]$Sudo,
+
+        # The content to write to the file
+        [Parameter(Mandatory, ValueFromPipeline, ValueFromPipelineByPropertyName)]
+        [Alias("Content")]
+        [string[]]$InputObject
+    )
+    begin {
+        $Content = @()
+    }
+    process {
+        $Content += $InputObject
+    }
+    end {
+        $params = @()
+        if ($Sudo) {
+            $params += "-u", "root"
+        }
+        if ($Distribution) {
+            $params += "-d", $Distribution
+        }
+        Write-Information "@`"`n$($InputObject -join "`n")`n`"@ | wsl $($params -join ' ') sh -c `"cat - >> '$Path'`""
+        $Content -join "`n" | wsl @params sh -c "cat - >> '$Path'"
+    }
 }
 
 function Update-WslCertificates {
@@ -530,15 +580,19 @@ function Install-WslSshAgentPipe {
             Invoke-RestMethod https://gist.githubusercontent.com/Jaykul/19e9f18b8a68f6ab854e338f9b38ca7b/raw/ssh-agent-pipe.sh
         }
         # escape $ and " so we can pass this through bash
-        $script = $script -replace "\$", "\$" -replace '"', '\"'
-
-        wsl -d $Distribution -u root -- bash -c "cat > /usr/local/bin/ssh-agent-pipe <<'EOF'`n${script}`nEOF"
+        $script | Set-WslContent -Sudo -Path /usr/local/bin/ssh-agent-pipe
 
         # Make it executable
         wsl -d $Distribution -u root chmod +x /usr/local/bin/ssh-agent-pipe
 
-        # Add to .bashrc for the specified user
-        wsl -d $Distribution -u $Username -- bash -c "echo \`"source /usr/local/bin/ssh-agent-pipe\`" >> ~/.bashrc"
+        if (-not ((wsl -d $Distribution cat '$HOME/.bashrc') -match "/usr/local/bin/ssh-agent-pipe")) {
+            # Add to .bashrc for the specified user
+            @(
+                "if [ -f /usr/local/bin/ssh-agent-pipe ]; then"
+                "  . /usr/local/bin/ssh-agent-pipe"
+                "fi"
+            ) | Add-WslContent -Path '$HOME/.bashrc'
+        }
     }
 }
 
