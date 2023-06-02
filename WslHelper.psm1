@@ -134,7 +134,7 @@ function Add-WslUser {
             If you pass in a credential with no password, it leaves the user passwordless (which breaks sudo).
             You must later run passwd to set it:
 
-            wsl -d $Distribution -u root passwd $($Env:USERNAME.ToLower())
+            wsl --distribution $Distribution --user root passwd $($Env:USERNAME.ToLower())
     #>
     [CmdletBinding()]
     param(
@@ -150,15 +150,15 @@ function Add-WslUser {
         Write-Warning "Creating passwordless user"
         # If we are interactive, you can leave off the --disabled-password and it would prompt, but this is for automation...
         Write-Host "`n>" wsl "-d" $Distribution "-u" root adduser "--gecos" GECOS "--disabled-password" $Credential.UserName.ToLower()
-        wsl -d $Distribution -u root adduser --gecos GECOS --disabled-password $Credential.UserName.ToLower()
+        wsl --distribution $Distribution --user root adduser --gecos GECOS --disabled-password $Credential.UserName.ToLower()
     } else {
         Write-Host "`n>" wsl "-d" $Distribution "-u" root adduser "--gecos" GECOS $Credential.UserName.ToLower()
         # You need to send the password twice to answer the prompt:
         "{0}`n{0}`n" -f $Credential.GetNetworkCredential().Password |
-            wsl -d $Distribution -u root adduser --gecos GECOS $Credential.UserName.ToLower()
+            wsl --distribution $Distribution --user root adduser --gecos GECOS $Credential.UserName.ToLower()
     }
     Write-Host "`n>" wsl "-d" $Distribution "-u" root usermod "-aG" sudo $Credential.UserName.ToLower()
-    wsl -d $Distribution -u root usermod -aG sudo $Credential.UserName.ToLower()
+    wsl --distribution $Distribution --user root usermod -aG sudo $Credential.UserName.ToLower()
 }
 
 function Install-WslDistro {
@@ -213,7 +213,7 @@ function Install-WslDistro {
         }
 
         if ($Credential.Password.Length -eq 0) {
-            Write-Warning "$Distribution distro is installed. You may need to set a password with: wsl -d $Distribution -u root passwd $($Env:USERNAME.ToLower())"
+            Write-Warning "$Distribution distro is installed. You may need to set a password with: wsl --distribution $Distribution --user root passwd $($Env:USERNAME.ToLower())"
         }
     } else {
         # Install the distribution interactively, by running `wsl --install` and letting it prompt for the username and password
@@ -367,7 +367,8 @@ function Update-WslCertificates {
             }
 
             Write-Verbose "update-ca-certificates on $($Name)"
-            Invoke-Wsl -u root --distribution $distro update-ca-certificates
+            wsl --user root --distribution $distro update-ca-certificates
+            wsl --user root --distribution $distro sudo systemctl restart snapd
         }
     }
 }
@@ -408,7 +409,7 @@ function Update-WslDns {
     )
     foreach ($distro in $Distribution) {
         Write-Verbose "Update /etc/resolv.conf for $distro"
-        wsl -u root --distribution $distro sh -c "cp /etc/resolv.conf /etc/resolv.conf.new && unlink /etc/resolv.conf && mv /etc/resolv.conf.new /etc/resolv.conf"
+        wsl --user root --distribution $distro sh -c "cp /etc/resolv.conf /etc/resolv.conf.new && unlink /etc/resolv.conf && mv /etc/resolv.conf.new /etc/resolv.conf"
         Set-WslContent -Distribution $Distro -Sudo -Path /etc/resolv.conf @(
             # Use systemd:
             "nameserver 127.0.0.53"
@@ -428,7 +429,7 @@ function Update-WslDns {
             Set-WslContent -Distribution $Distro -Sudo -Path /etc/systemd/resolved.conf @($resolved | ConvertTo-IniContent)
         }
 
-        Set-WslGenerateResolvConf -Distribution $distro -generateResolvConf:$false
+        Set-WslGenerateResolvConf -Distribution $distro -generateResolvConf:$false -Restart
     }
 }
 
@@ -489,7 +490,7 @@ function Set-WslGenerateResolvConf {
             }
 
             # start it back up, hopefully it'll loose the /etc/resolv.conf
-            wsl --distribution $distro echo hello
+            wsl --distribution $distro echo $distro restarted
         }
     }
 }
@@ -518,14 +519,14 @@ function Update-WslUbuntu {
         # I did not bother asking you for permission to do this.
         # Aptitude is better. Just use that, even though it takes 22Mb
         if (!(Invoke-Wsl --distribution $distro which aptitude 2>$null)) {
-            wsl -d $Distribution -u root apt update
-            wsl -d $Distribution -u root apt install -y aptitude
+            wsl --distribution $Distribution --user root apt update
+            wsl --distribution $Distribution --user root apt install -y aptitude
         }
 
         # Update the list of packages
-        wsl -d $Distribution -u root aptitude update
+        wsl --distribution $Distribution --user root aptitude update
         # Install pre-requisite packages.
-        wsl -d $Distribution -u root aptitude safe-upgrade -y
+        wsl --distribution $Distribution --user root aptitude safe-upgrade -y
     }
 }
 
@@ -553,21 +554,25 @@ function Install-WslSshAgentPipe {
         [switch]$NoChocolate
     )
 
-    foreach ($distro in $Distribution) {
-        Write-Verbose "Install ssh for $distro"
-        # Install npiperelay
-        if (!(Get-Command npiperelay.exe -ErrorAction Ignore)) {
-            if (-not $NoChocolate -and (Get-Command choco -ErrorAction Ignore)) {
-                choco upgrade npiperelay -y
-            } elseif (Get-Command winget -ErrorAction Ignore) {
-                winget install --id=jstarks.npiperelay -e --accept-source-agreements
-            } else {
-                throw "Unable to install. Please download https://github.com/jstarks/npiperelay/releases/latest/download/npiperelay_windows_amd64.zip and extract it somewhere in your PATH"
-            }
+    Write-Verbose "Install npiperelay on Windows"
+    # Install npiperelay
+    if (!(Get-Command npiperelay.exe -ErrorAction Ignore)) {
+        if (-not $NoChocolate -and (Get-Command choco -ErrorAction Ignore)) {
+            choco upgrade npiperelay -y
+        } elseif (Get-Command winget -ErrorAction Ignore) {
+            winget install --id=jstarks.npiperelay -e --accept-source-agreements
+        } else {
+            throw "Unable to install. Please download https://github.com/jstarks/npiperelay/releases/latest/download/npiperelay_windows_amd64.zip and extract it somewhere in your PATH"
         }
+    }
+
+    foreach ($distro in $Distribution) {
+        Update-WslUbuntu -Distribution $distr
+
+        Write-Verbose "Install ssh for $distro"
 
         # install socat in WSL
-        wsl -d $Distribution -u root aptitude install -y socat
+        wsl --distribution $Distribution --user root aptitude install -y socat
         if ($LASTEXITCODE) {
             throw "Unable to install socat. I give up."
         }
@@ -583,9 +588,9 @@ function Install-WslSshAgentPipe {
         $script | Set-WslContent -Sudo -Path /usr/local/bin/ssh-agent-pipe
 
         # Make it executable
-        wsl -d $Distribution -u root chmod +x /usr/local/bin/ssh-agent-pipe
+        wsl --distribution $Distribution --user root chmod +x /usr/local/bin/ssh-agent-pipe
 
-        if (-not ((wsl -d $Distribution cat '$HOME/.bashrc') -match "/usr/local/bin/ssh-agent-pipe")) {
+        if (-not ((wsl --distribution $Distribution cat '$HOME/.bashrc') -match "/usr/local/bin/ssh-agent-pipe")) {
             # Add to .bashrc for the specified user
             @(
                 "if [ -f /usr/local/bin/ssh-agent-pipe ]; then"
@@ -596,12 +601,12 @@ function Install-WslSshAgentPipe {
     }
 }
 
-function Install-WslUbuntuPwsh {
+function Install-WslPowerShellSnap {
     <#
         .SYNOPSIS
-            Install pwsh in Ubuntu 18.04 or higher.
+            Install PowerShell via snap
         .DESCRIPTION
-            Installs pwsh from the Microsoft package repository.
+            Installs PowerShell via snap. You can do this by hand.
             Only works for supported versions of Ubuntu >= 18.04
 
         .LINK
@@ -609,25 +614,45 @@ function Install-WslUbuntuPwsh {
     #>
     [CmdletBinding()]
     param(
-        # The distribution to install into
+        # The distribution to install into. Defaults to all the ones that start with "Ubuntu"
         [Parameter(Position = 0)]
         [string[]]$Distribution = $(Invoke-Wsl --list --quiet | Where-Object { $_ -match "^ubuntu" })
     )
     foreach ($distro in $Distribution) {
         Write-Verbose "Install pwsh for $distro"
-        # Update the list of packages
-        wsl -d $distro -u root aptitude update
-        # Install pre-requisite packages.
-        wsl -d $distro -u root aptitude install -y wget apt-transport-https software-properties-common
-        # Download the Microsoft repository GPG keys
-        wsl -d $distro -u root -- bash -c 'wget -q "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"'
-        # Register the Microsoft repository GPG keys
-        wsl -d $distro -u root dpkg -i packages-microsoft-prod.deb
-        # Delete the the Microsoft repository GPG keys file
-        wsl -d $distro -u root rm packages-microsoft-prod.deb
-        # Update the list of packages after we added packages.microsoft.com
-        wsl -d $distro -u root aptitude update
         # Install PowerShell
-        wsl -d $distro -u root aptitude install -y powershell
+        wsl --user root --distribution $distro sudo snap install powershell --classic
+    }
+}
+
+function Install-WslKubectlSnap {
+    <#
+        .SYNOPSIS
+            Install kubelogin, kubectl, and helm via snap
+        .DESCRIPTION
+            Installs using snap. You can do this by hand, but this is our "current" versions.
+
+            Depends on "snap" which is on by default in Ubuntu on WSL 2 now that systemd works.
+
+        .LINK
+            https://snapcraft.io/docs/install-modes
+            https://snapcraft.io/docs/getting-started#heading--install-snap
+            https://snapcraft.io/install/kubectl/ubuntu
+    #>
+    [CmdletBinding()]
+    param(
+        # The distribution to install into. Defaults to all the ones that start with "Ubuntu"
+        [Parameter(Position = 0)]
+        [string[]]$Distribution = $(Invoke-Wsl --list --quiet | Where-Object { $_ -match "^ubuntu" })
+    )
+    foreach ($distro in $Distribution) {
+        Write-Verbose "Install kubectl for $distro"
+        # Creates a symlink between your windows ~\.kube\config and the linux one
+        wsl --distribution $distro bash -c "if ! [ -d ~/.kube ]; then mkdir ./kube; fi && ln -s `$(wslpath $((Convert-Path ~\.kube\config) -replace "\\", "\\\\")) ~/.kube/config"
+
+        wsl --user root --distribution $distro snap install kubectl --classic --channel=1.26/stable
+        wsl --user root --distribution $distro snap install helm --classic
+        wsl --user root --distribution $distro snap install kubelogin
+        wsl --user root --distribution ubuntu /snap/bin/helm plugin install https://github.com/helm/helm-mapkubeapis
     }
 }

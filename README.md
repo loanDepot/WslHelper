@@ -37,17 +37,40 @@ wsl --list --verbose
 
 ## Installing WSL Tools
 
+tl;dr:
+
+Import the module and run these commands in PowerShell on Windows:
+
+```powershell
+Install-WslDistro -Default
+Update-WslCertificates -Verbose
+wsl ping google.com -c3 || Update-WslDns -Verbose
+Update-WslUbuntu
+Install-WslPowerShellSnap
+Install-WslKubectlSnap
+```
+
 ### Update WSL
 
 See [first things first](#first-things-first) above.
 
-### Install ubuntu.
+### Install ubuntu
 
 ```powershell
 Install-WslDistro
 ```
 
 If you're running this by hand, you'll be prompted for a password, which you'll need to remember whenever you need to `sudo` to run something as root...
+
+### Copy private CA certificates
+
+If you are using a private (internal) CA that's basically self-signed, or if you're using ZScaler (with it's self-signed certificate) then you need to add those CA certificates to WSL's trust list. You can pass a list of their thumbprints to `Update-WslCertificates`.
+
+If you look at the default value, I wrote this so it works for LoanDepot with _no parameters_, but you just need to run something like:
+
+```powershell
+Get-ChildItem Cert:\LocalMachine\Root | Where-Object Subject -Match "ZScaler" | Update-WslCertificates
+```
 
 ### Make sure your network is working
 
@@ -73,7 +96,15 @@ Since WSL distros are not included in Windows Update, you periodically need to u
 Update-WslUbuntu
 ```
 
-### Additional, optional, one-time steps:
+Note that this installs and uses `aptitude` because it's a better experience than using apt-get or apt.
+The other `Install` functions depend on this (unless they say "Snap"), and will call it to ensure aptitude is installed.
+
+### Installing additional tools.
+
+There are a lot of ways to install our tools like powershell, kubectl, and helm.
+Now that WSL 2 supports systemd, Ubuntu in WSL supports snap, which makes that _by far_ the simplest way to install things.
+We still have wrapper scripts for a few pieces of this, but you can probably just `sudo snap install ...`
+
 
 #### Install PowerShell on Linux:
 
@@ -91,13 +122,13 @@ If you frequently connect via `ssh` and have configured the Windows OpenSSH Agen
 Install-WslSshAgentPipe
 ```
 
-### Kubernetes tools
+#### Install Kubernetes tools
 
-There are a lot of ways to install kubectl, helm, etc.
+This function installs kubelogin (for azure), kubectl, and helm, and needs to be updated each release to install the specific (old) version of kubectl we need for working with our "stable" AKS clusters in Azure.
 
-We're going to choose one. Probably nix.
-
-TODO: how to install (specific versions of) kubectl, kubelogin, and helm.
+```powershell
+Install-WslK8sTools
+```
 
 ## CAUTION:
 
