@@ -249,6 +249,7 @@ function Set-WslContent {
         # The content to write to the file
         [Parameter(Mandatory)]
         [Alias("Content")]
+        [AllowEmptyString()]
         [string[]]$InputObject
     )
     begin {
@@ -291,6 +292,7 @@ function Add-WslContent {
         # The content to write to the file
         [Parameter(Mandatory, ValueFromPipeline, ValueFromPipelineByPropertyName)]
         [Alias("Content")]
+        [AllowEmptyString()]
         [string[]]$InputObject
     )
     begin {
@@ -628,7 +630,7 @@ function Install-WslPowerShellSnap {
 function Install-WslKubectlSnap {
     <#
         .SYNOPSIS
-            Install kubelogin, kubectl, and helm via snap
+            Install kubelogin, kubectl, and helm via snap. Optionally, adds our common plugins.
         .DESCRIPTION
             Installs using snap. You can do this by hand, but this is our "current" versions.
 
@@ -643,7 +645,10 @@ function Install-WslKubectlSnap {
     param(
         # The distribution to install into. Defaults to all the ones that start with "Ubuntu"
         [Parameter(Position = 0)]
-        [string[]]$Distribution = $(Invoke-Wsl --list --quiet | Where-Object { $_ -match "^ubuntu" })
+        [string[]]$Distribution = $(Invoke-Wsl --list --quiet | Where-Object { $_ -match "^ubuntu" }),
+
+        # If set, also installs our most common plugins for helm and kubectl
+        [switch]$IncludePlugins
     )
     foreach ($distro in $Distribution) {
         Write-Verbose "Install kubectl for $distro"
@@ -653,6 +658,21 @@ function Install-WslKubectlSnap {
         wsl --user root --distribution $distro snap install kubectl --classic --channel=1.26/stable
         wsl --user root --distribution $distro snap install helm --classic
         wsl --user root --distribution $distro snap install kubelogin
-        wsl --user root --distribution ubuntu /snap/bin/helm plugin install https://github.com/helm/helm-mapkubeapis
+
+        if ($IncludePlugins) {
+            Write-Warning "Installing mapkubeapis plugin for helm"
+            # Depends on having helm installed as a snap, but works
+            wsl --distribution $distro /snap/bin/helm plugin install https://github.com/helm/helm-mapkubeapis
+
+            Write-Warning "Installing krew plugin for kubectl"
+            # Krew supports installing kubectl plugins (not sure why this isn't just built-in like helm's)
+            wsl --distribution $distro bash -c '
+            cd "$(mktemp -d)" &&
+            curl -fsSLO "https://github.com/kubernetes-sigs/krew/releases/latest/download/krew-linux_amd64.tar.gz" &&
+            tar zxvf "krew-linux_amd64.tar.gz" &&
+            ./"krew-linux_amd64" install krew
+            '
+            'export PATH="$HOME/.krew/bin:$PATH"' | Add-WslContent -Path '$HOME/.bashrc'
+        }
     }
 }
